@@ -56,33 +56,81 @@ detect_os() {
 bin_for_pkg() {
   local os="$1" pkg="$2"
   case "$pkg" in
-    ripgrep)          echo "rg" ;;
-    fd-find)          echo "fdfind" ;;
-    neovim)           echo "nvim" ;;
-    golang)           echo "go" ;;
-    python3-pip)      echo "pip3" ;;
-    python-pip)       echo "pip" ;;
-    build-essential)  echo "gcc" ;;
-    google-cloud-cli) echo "gcloud" ;;
-    *)                echo "$pkg" ;;
+    ripgrep)            echo "rg" ;;
+    fd-find)            echo "fdfind" ;;
+    neovim)             echo "nvim" ;;
+    golang)             echo "go" ;;
+    python3-pip)        echo "pip3" ;;
+    python-pip)         echo "pip" ;;
+    build-essential)    echo "gcc" ;;
+    google-cloud-cli)   echo "gcloud" ;;
+    postgresql@*)       echo "psql" ;;
+    postgresql-client)  echo "psql" ;;
+    postgresql)         echo "psql" ;;
+    *)                  echo "$pkg" ;;
   esac
+}
+
+is_installed() {
+  local os="$1" pkg="$2"
+  local bin; bin=$(bin_for_pkg "$os" "$pkg")
+  command -v "$bin" >/dev/null 2>&1 && return 0
+  case "$os" in
+    macos)  brew list --formula "$pkg" >/dev/null 2>&1 ;;
+    debian) dpkg -s "$pkg" >/dev/null 2>&1 ;;
+    arch)   pacman -Q "$pkg" >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+
+needs_upgrade() {
+  local os="$1" pkg="$2"
+  case "$os" in
+    macos)
+      brew outdated --quiet "$pkg" 2>/dev/null | grep -qx "$pkg"
+      ;;
+    debian)
+      apt list --upgradable 2>/dev/null | grep -q "^$pkg/"
+      ;;
+    arch)
+      pacman -Qu "$pkg" 2>/dev/null | grep -q "^$pkg "
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+installed_version() {
+  local os="$1" pkg="$2"
+  case "$os" in
+    macos)  brew list --versions "$pkg" 2>/dev/null | awk '{print $2}' || true ;;
+    debian) dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true ;;
+    arch)   pacman -Q "$pkg" 2>/dev/null | awk '{print $2}' || true ;;
+  esac
+  return 0
 }
 
 install_one() {
   local os="$1" pkg="$2"
   local bin; bin=$(bin_for_pkg "$os" "$pkg")
 
-  if command -v "$bin" >/dev/null 2>&1; then
+  if is_installed "$os" "$pkg"; then
+    local ver; ver=$(installed_version "$os" "$pkg")
     if [[ "$UPDATE_MODE" == "1" ]]; then
-      log_info "updating $pkg"
-      case "$os" in
-        macos)  brew upgrade "$pkg" || log_err "brew upgrade $pkg failed (continuing)" ;;
-        debian) sudo apt-get install -y --only-upgrade "$pkg" ;;
-        arch)   sudo pacman -S --needed --noconfirm "$pkg" ;;
-      esac
+      if needs_upgrade "$os" "$pkg"; then
+        log_info "updating $pkg (installed: ${ver:-unknown})"
+        case "$os" in
+          macos)  brew upgrade "$pkg" || log_err "brew upgrade $pkg failed (continuing)" ;;
+          debian) sudo apt-get install -y --only-upgrade "$pkg" ;;
+          arch)   sudo pacman -S --needed --noconfirm "$pkg" ;;
+        esac
+      else
+        log_skip "$pkg up to date (${ver:-installed})"
+      fi
       return 0
     fi
-    log_skip "$pkg already installed ($(command -v "$bin"))"
+    log_skip "$pkg already installed (${ver:-$(command -v "$bin" 2>/dev/null || echo present)})"
     return 0
   fi
 
@@ -100,12 +148,17 @@ install_cask() {
   local cask="$1"
   local app_name="${2:-}"
   if brew list --cask "$cask" >/dev/null 2>&1; then
+    local ver; ver=$(brew list --cask --versions "$cask" 2>/dev/null | awk '{print $2}' || true)
     if [[ "$UPDATE_MODE" == "1" ]]; then
-      log_info "updating cask $cask"
-      brew upgrade --cask "$cask" || log_err "brew upgrade --cask $cask failed (continuing)"
+      if brew outdated --cask --quiet "$cask" 2>/dev/null | grep -qx "$cask"; then
+        log_info "updating cask $cask (installed: ${ver:-unknown})"
+        brew upgrade --cask "$cask" || log_err "brew upgrade --cask $cask failed (continuing)"
+      else
+        log_skip "cask $cask up to date (${ver:-installed})"
+      fi
       return 0
     fi
-    log_skip "$cask already installed (cask)"
+    log_skip "$cask already installed (${ver:-cask})"
     return 0
   fi
   if [[ -n "$app_name" ]] && \
@@ -267,6 +320,28 @@ install_lang_tools() {
       install_one "$os" base-devel
       install_one "$os" clang
       install_one "$os" go
+      ;;
+  esac
+}
+
+install_postgres() {
+  local os="$1"
+  log_step "PostgreSQL + psql"
+  case "$os" in
+    macos)
+      install_one "$os" postgresql@16
+      if ! command -v psql >/dev/null 2>&1; then
+        log_info "postgresql@16 is keg-only; add to PATH:"
+        log_info '  echo '"'"'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"'"'"' >> ~/.zshrc'
+        log_info "or run: brew link --force postgresql@16"
+      fi
+      ;;
+    debian)
+      install_one "$os" postgresql
+      install_one "$os" postgresql-client
+      ;;
+    arch)
+      install_one "$os" postgresql
       ;;
   esac
 }
@@ -637,6 +712,7 @@ main() {
 
   install_dev_apps "$os"
   install_lang_tools "$os"
+  install_postgres "$os"
   install_nvm_node
 
   install_tmux_conf
@@ -650,7 +726,7 @@ main() {
   install_alacritty_binding
 
   log_step "Summary"
-  for b in fzf fd rg tmux nvim git code dbeaver gcloud docker python3 pip3 gcc clang go node; do
+  for b in fzf fd rg tmux nvim git code dbeaver gcloud docker python3 pip3 gcc clang go node psql; do
     if command -v "$b" >/dev/null 2>&1; then
       log_ok "$b -> $(command -v "$b")"
     else
