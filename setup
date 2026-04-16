@@ -329,11 +329,11 @@ install_postgres() {
   log_step "PostgreSQL + psql"
   case "$os" in
     macos)
-      install_one "$os" postgresql@16
+      install_one "$os" postgresql@17
       if ! command -v psql >/dev/null 2>&1; then
-        log_info "postgresql@16 is keg-only; add to PATH:"
-        log_info '  echo '"'"'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"'"'"' >> ~/.zshrc'
-        log_info "or run: brew link --force postgresql@16"
+        log_info "postgresql@17 is keg-only; add to PATH:"
+        log_info '  echo '"'"'export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"'"'"' >> ~/.zshrc'
+        log_info "or run: brew link --force postgresql@17"
       fi
       ;;
     debian)
@@ -376,6 +376,30 @@ install_nvm_node() {
     nvm install --lts
     nvm alias default 'lts/*' >/dev/null 2>&1 || true
     log_ok "Node $(nvm current) installed"
+  fi
+}
+
+install_bun() {
+  log_step "Bun"
+  local bun_bin="$HOME/.bun/bin/bun"
+  if command -v bun >/dev/null 2>&1 || [[ -x "$bun_bin" ]]; then
+    local ver
+    ver=$("$bun_bin" --version 2>/dev/null || bun --version 2>/dev/null || echo unknown)
+    if [[ "$UPDATE_MODE" == "1" ]]; then
+      log_info "upgrading bun (installed: $ver)"
+      "$bun_bin" upgrade >/dev/null 2>&1 || bun upgrade || log_err "bun upgrade failed (continuing)"
+      log_ok "bun now $("$bun_bin" --version 2>/dev/null || bun --version)"
+    else
+      log_skip "bun already installed ($ver)"
+    fi
+    return 0
+  fi
+  log_info "installing bun"
+  curl -fsSL https://bun.sh/install | bash
+  if [[ -x "$bun_bin" ]]; then
+    log_ok "bun $("$bun_bin" --version) installed at $bun_bin"
+  else
+    log_err "bun install script ran but $bun_bin not found"
   fi
 }
 
@@ -521,13 +545,23 @@ install_block() {
 }
 
 install_path_exports() {
+  local os="$1"
   log_step "PATH exports"
   local rc; rc=$(pick_rc)
   local marker="# >>> setup-env PATH >>>"
   local end_marker="# <<< setup-env PATH <<<"
   local body
-  body=$(cat <<'EOF'
-export PATH="$HOME/.local/bin:$HOME/.local/scripts:$PATH"
+  local extra=""
+  if [[ "$os" == "macos" ]]; then
+    local brew_prefix=""
+    if command -v brew >/dev/null 2>&1; then
+      brew_prefix=$(brew --prefix 2>/dev/null || true)
+    fi
+    [[ -z "$brew_prefix" ]] && brew_prefix="/opt/homebrew"
+    extra=":$brew_prefix/opt/postgresql@17/bin:$brew_prefix/opt/libpq/bin"
+  fi
+  body=$(cat <<EOF
+export PATH="\$HOME/.local/bin:\$HOME/.local/scripts${extra}:\$PATH"
 EOF
 )
   install_block "$rc" "$marker" "$end_marker" "$body"
@@ -714,11 +748,12 @@ main() {
   install_lang_tools "$os"
   install_postgres "$os"
   install_nvm_node
+  install_bun
 
   install_tmux_conf
   install_tmux_dev
   clone_or_pull_nvim
-  install_path_exports
+  install_path_exports "$os"
   install_sd_function
   install_ctrl_f_binding
   install_iterm2_binding
@@ -726,7 +761,8 @@ main() {
   install_alacritty_binding
 
   log_step "Summary"
-  for b in fzf fd rg tmux nvim git code dbeaver gcloud docker python3 pip3 gcc clang go node psql; do
+  [[ -d "$HOME/.bun/bin" ]] && export PATH="$HOME/.bun/bin:$PATH"
+  for b in fzf fd rg tmux nvim git code dbeaver gcloud docker python3 pip3 gcc clang go node bun psql; do
     if command -v "$b" >/dev/null 2>&1; then
       log_ok "$b -> $(command -v "$b")"
     else
