@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="${1:-$PWD}"
+DIR="$(cd "$DIR" && pwd)"
+
+SESSION="dev-$(basename "$DIR" | tr -c 'a-zA-Z0-9_-' '_')-$$"
+
+if [[ -n "${TMUX:-}" ]]; then
+  echo "Already inside tmux. Detach first or run from a plain shell." >&2
+  exit 1
+fi
+
+tmux new-session -d -s "$SESSION" -c "$DIR" -x "$(tput cols)" -y "$(tput lines)"
+
+tmux send-keys -t "$SESSION":0.0 "nvim ." C-m
+
+tmux split-window -h -l '25%' -t "$SESSION":0.0 -c "$DIR"
+tmux send-keys -t "$SESSION":0.1 "claude" C-m
+
+tmux split-window -v -l '20%' -t "$SESSION":0.0 -c "$DIR"
+
+tmux select-pane -t "$SESSION":0.0
+
+exec tmux attach -t "$SESSION"
