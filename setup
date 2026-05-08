@@ -267,6 +267,7 @@ install_dev_apps() {
       install_cask docker "Docker"
       log_info "launch Docker Desktop once to finish setup"
       install_cask telegram "Telegram"
+      install_cask nikitabobko/tap/aerospace "AeroSpace"
       ;;
     debian)
       install_vscode_debian
@@ -477,6 +478,30 @@ install_tmux_conf() {
   else
     log_skip "TPM already present"
   fi
+}
+
+install_aerospace_conf() {
+  log_step "AeroSpace config (.aerospace.toml)"
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    log_skip "not macOS, skipping AeroSpace"
+    return
+  fi
+  local src="$SCRIPT_DIR/.aerospace.toml"
+  local dst="$HOME/.aerospace.toml"
+  if [[ ! -f "$src" ]]; then
+    log_err "missing $src"; return 1
+  fi
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    log_skip ".aerospace.toml already up to date"
+    return
+  fi
+  if [[ -f "$dst" && "$UPDATE_MODE" != "1" ]]; then
+    log_skip ".aerospace.toml exists (run with --update to overwrite)"
+    return
+  fi
+  backup_if_present "$dst"
+  cp "$src" "$dst"
+  log_ok "installed $dst"
 }
 
 install_tmux_dev() {
@@ -752,6 +777,7 @@ main() {
 
   install_tmux_conf
   install_tmux_dev
+  install_aerospace_conf
   clone_or_pull_nvim
   install_path_exports "$os"
   install_sd_function
